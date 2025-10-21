@@ -388,22 +388,29 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script>
-(async function() {
+(async function () {
   'use strict';
-  
+
+  // ───────────────────────────────────────────────────────────────
+  // BOUNDS: show only April 1993 through Dec 2025, and start at 1993-04
+  const START_BOUND = new Date(Date.UTC(1993, 3, 1));   // April 1, 1993 (month index 3)
+  const END_BOUND   = new Date(Date.UTC(2025, 11, 31)); // Dec 31, 2025
+  // ───────────────────────────────────────────────────────────────
+
   const COLORS = {
-  paper: "#f59e0b",        // Orange
-  mgp: "#8b5cf6",          // Purple
-  all_organics: "#10b981", // Green
-  refuse: "#64748b",       // Slate gray
-  res: "#22c55e",          // Bright green
-  school: "#3b82f6",       // Blue
-  leaves: "#eab308",       // Yellow
-  xmas: "#ef4444",         // Red
-  other: "#ec4899"         // Pink
-};
-  
+    paper: "#f59e0b",
+    mgp: "#8b5cf6",
+    all_organics: "#10b981",
+    refuse: "#64748b",
+    res: "#22c55e",
+    school: "#3b82f6",
+    leaves: "#eab308",
+    xmas: "#ef4444",
+    other: "#ec4899"
+  };
+
   const LABELS = {
     paper: "Paper",
     mgp: "Metal/Glass/Plastic",
@@ -415,7 +422,7 @@
     xmas: "Christmas Trees",
     other: "Other Organics"
   };
-  
+
   const POPULATION = {
     'Queens': 2211000,
     'Brooklyn': 2559000,
@@ -423,7 +430,7 @@
     'Bronx': 1362000,
     'Staten Island': 475000
   };
-  
+
   const state = {
     monthIndex: 0,
     breakdown: false,
@@ -431,52 +438,57 @@
     excludeRefuse: true,
     perCapita: false,
     playing: false,
+    playInterval: null,
     selectedBorough: null,
     monthsSorted: [],
     dataByMonth: new Map()
   };
-  
+
   const SVG_WIDTH = 1100;
   const SVG_HEIGHT = 640;
-  
+
+  // ───────────────────────────────────────────────────────────────
+  // Utilities
   function parseMonth(str) {
     const m = str.match(/(\d{4})\s*[/\-]\s*(\d{2})/);
     if (!m) return null;
     return new Date(Date.UTC(+m[1], +m[2] - 1, 1));
   }
-  
+
   function formatMonth(str) {
     const date = parseMonth(str);
     if (!date) return str;
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
   }
-  
+
   function formatNumber(n) {
     return new Intl.NumberFormat('en-US').format(Math.round(n));
   }
-  
+
   function formatPercent(n) {
     return d3.format('.0%')(n);
   }
-  
+
   function tonsToLbsPerPerson(tons, borough) {
     const pop = POPULATION[borough];
     if (!pop) return 0;
     return (tons * 2000) / pop;
   }
-  
+
   function formatPerCapita(lbs) {
     return d3.format('.1f')(lbs);
   }
-  
+  // ───────────────────────────────────────────────────────────────
+
+  // Data processing
   function processData(rawData) {
     const rows = [];
-    
+
     for (const d of rawData) {
       const monthStr = (d.MONTH || '').trim();
       const borough = (d.BOROUGH || '').trim();
       if (!monthStr || !borough) continue;
-      
+
       rows.push({
         monthStr, borough,
         paper: +(d.PAPERTONSCOLLECTED || 0),
@@ -489,23 +501,23 @@
         other: +(d.OTHERORGANICSTONS || 0)
       });
     }
-    
+
     const uniqueMonths = [...new Set(rows.map(r => r.monthStr))];
     const monthsSorted = uniqueMonths
       .map(ms => ({ ms, date: parseMonth(ms) }))
       .filter(d => d.date)
       .sort((a, b) => a.date - b.date)
       .map(d => d.ms);
-    
+
     const dataByMonth = new Map();
-    
+
     for (const ms of monthsSorted) {
       const monthData = rows.filter(r => r.monthStr === ms);
       const boroughMap = new Map();
-      
+
       for (const borough of ['Brooklyn', 'Manhattan', 'Bronx', 'Queens', 'Staten Island']) {
         const boroughRows = monthData.filter(r => r.borough === borough);
-        
+
         const paper = d3.sum(boroughRows, r => r.paper);
         const mgp = d3.sum(boroughRows, r => r.mgp);
         const refuse = d3.sum(boroughRows, r => r.refuse);
@@ -515,26 +527,27 @@
         const xmas = d3.sum(boroughRows, r => r.xmas);
         const other = d3.sum(boroughRows, r => r.other);
         const all_organics = res + school + leaves + xmas + other;
-        
+
         boroughMap.set(borough, {
           paper, mgp, refuse, res, school, leaves, xmas, other,
           all_organics,
           total: paper + mgp + refuse + all_organics
         });
       }
-      
+
       dataByMonth.set(ms, boroughMap);
     }
-    
+
     return { monthsSorted, dataByMonth };
   }
-  
+
+  // Layout helpers
   function getGridLayout() {
     const pad = 16;
     const cols = 3, rows = 2;
     const cellW = (SVG_WIDTH - pad * (cols + 1)) / cols;
     const cellH = (SVG_HEIGHT - pad * (rows + 1)) / rows;
-    
+
     return {
       'Brooklyn': { x: pad, y: pad, w: cellW, h: cellH },
       'Manhattan': { x: pad + cellW + pad, y: pad, w: cellW, h: cellH },
@@ -543,43 +556,43 @@
       'Staten Island': { x: pad + cellW + pad, y: pad + cellH + pad, w: cellW, h: cellH }
     };
   }
-  
+
   function getStreamKeys() {
     const keys = state.breakdown
       ? ['paper', 'mgp', 'res', 'school', 'leaves', 'xmas', 'other', 'refuse']
       : ['paper', 'mgp', 'all_organics', 'refuse'];
-    
+
     return state.excludeRefuse ? keys.filter(k => k !== 'refuse') : keys;
   }
-  
+
+  // Rendering
   function render() {
     const monthStr = state.monthsSorted[state.monthIndex];
     const boroughData = state.dataByMonth.get(monthStr);
     if (!boroughData) return;
-    
+
     const gridLayout = getGridLayout();
     const keys = getStreamKeys();
     const svg = d3.select('#viz');
-    
     const boroughs = ['Brooklyn', 'Manhattan', 'Bronx', 'Queens', 'Staten Island'];
-    
+
     const totals = state.perCapita
       ? boroughs.map(b => tonsToLbsPerPerson(boroughData.get(b).total, b))
       : boroughs.map(b => boroughData.get(b).total);
-    
+
     const maxTotal = d3.max(totals) || 1;
     const sizeScale = d3.scaleSqrt().domain([0, maxTotal]).range([0.5, 1]);
-    
+
     const tiles = boroughs.map(borough => {
       const data = boroughData.get(borough);
       const frame = gridLayout[borough];
-      const displayValue = state.perCapita 
+      const displayValue = state.perCapita
         ? tonsToLbsPerPerson(data.total, borough)
         : data.total;
       const scale = sizeScale(displayValue);
       const w = frame.w * scale;
       const h = frame.h * scale;
-      
+
       return {
         borough,
         x: frame.x + (frame.w - w) / 2,
@@ -590,60 +603,71 @@
         displayValue
       };
     });
-    
+
     const groups = svg.selectAll('g.borough-group')
       .data(tiles, d => d.borough);
-    
+
     const groupsEnter = groups.enter()
       .append('g')
       .attr('class', 'borough-group')
       .on('click', (event, d) => showDetailPanel(d.borough));
-    
+
     groupsEnter.append('rect').attr('class', 'tile-bg').attr('rx', 10).attr('fill', '#fafafa');
     groupsEnter.append('text').attr('class', 'borough-name').attr('font-weight', 600).attr('font-size', 15);
     groupsEnter.append('text').attr('class', 'total-tons').attr('font-size', 12).attr('fill', '#6b7280');
     groupsEnter.append('g').attr('class', 'segments');
-    
+
     const groupsMerge = groups.merge(groupsEnter);
-    
+
     groupsMerge
       .transition().duration(450)
       .attr('transform', d => `translate(${d.x},${d.y})`);
-    
+
     groupsMerge.select('.tile-bg')
       .transition().duration(450)
       .attr('width', d => d.w)
       .attr('height', d => d.h)
       .attr('stroke', d => state.selectedBorough === d.borough ? '#3b82f6' : '#e5e7eb')
       .attr('stroke-width', d => state.selectedBorough === d.borough ? 3 : 1.5);
-    
+
     groupsMerge.select('.borough-name')
       .text(d => d.borough)
       .attr('x', 12).attr('y', 20);
-    
+
     groupsMerge.select('.total-tons')
-      .text(d => state.showPercent ? '100%' : state.perCapita ? `${formatPerCapita(d.displayValue)} lbs/person` : `${formatNumber(d.data.total)} tons`)
+      .text(d => state.showPercent
+        ? '100%'
+        : state.perCapita
+          ? `${formatPerCapita(d.displayValue)} lbs/person`
+          : `${formatNumber(d.data.total)} tons`)
       .attr('x', 12).attr('y', 36);
-    
-    groupsMerge.each(function(tile) {
+
+    groupsMerge.each(function (tile) {
       const segmentGroup = d3.select(this).select('.segments');
       const pad = 16, startY = 50;
       const barW = tile.w - pad * 2;
       const barH = tile.h - startY - pad;
-      
+
       const values = keys.map(k => ({ key: k, value: tile.data[k] || 0 }));
       const totalValue = d3.sum(values, v => v.value) || 1;
-      
+
       let y = startY;
       const segments = values.map(v => {
         const h = Math.max(1, barH * (v.value / totalValue));
-        const seg = { key: v.key, value: v.value, perCapitaValue: tonsToLbsPerPerson(v.value, tile.borough), share: v.value / totalValue, x: pad, y, w: barW, h, borough: tile.borough };
+        const seg = {
+          key: v.key,
+          value: v.value,
+          perCapitaValue: tonsToLbsPerPerson(v.value, tile.borough),
+          share: v.value / totalValue,
+          x: pad, y, w: barW, h,
+          borough: tile.borough
+        };
         y += h;
         return seg;
       });
-      
+
       const rects = segmentGroup.selectAll('rect.segment').data(segments, d => d.key);
-      
+
       rects.enter().append('rect')
         .attr('class', 'segment')
         .attr('rx', 2)
@@ -660,12 +684,12 @@
         .attr('width', d => d.w)
         .attr('height', d => d.h)
         .attr('fill', d => COLORS[d.key]);
-      
+
       rects.exit().remove();
-      
+
       const labels = segmentGroup.selectAll('text.segment-label')
         .data(segments.filter(s => s.h > 30 && s.share >= 0.05), d => d.key);
-      
+
       labels.enter().append('text')
         .attr('class', 'segment-label')
         .attr('text-anchor', 'middle')
@@ -678,66 +702,68 @@
         .transition().duration(450)
         .attr('x', d => d.x + d.w / 2)
         .attr('y', d => d.y + d.h / 2 + 4);
-      
+
       labels.exit().remove();
     });
-    
+
     groups.exit().remove();
   }
-  
+
+  // Tooltip
   const tooltip = d3.select('#tooltip');
-  
+
   function showTooltip(event, d) {
-    const html = state.perCapita 
+    const html = state.perCapita
       ? `<strong>${LABELS[d.key]}</strong><br>${formatPerCapita(d.perCapitaValue)} lbs/person<br>${formatPercent(d.share)} of total`
       : `<strong>${LABELS[d.key]}</strong><br>${formatNumber(d.value)} tons<br>${formatPercent(d.share)} of total`;
     tooltip.html(html).classed('show', true);
     moveTooltip(event);
   }
-  
+
   function moveTooltip(event) {
     tooltip.style('left', (event.pageX + 12) + 'px').style('top', (event.pageY - 12) + 'px');
   }
-  
+
   function hideTooltip() {
     tooltip.classed('show', false);
   }
-  
+
+  // Detail Panel
   function showDetailPanel(borough) {
     state.selectedBorough = borough;
     const panel = d3.select('#detail-panel');
     panel.classed('show', true);
     d3.select('.main-container').classed('panel-open', true);
-    
+
     const monthStr = state.monthsSorted[state.monthIndex];
     const data = state.dataByMonth.get(monthStr).get(borough);
-    
+
     d3.select('#panelBorough').text(borough);
     d3.select('#panelMonth').text(formatMonth(monthStr));
-    
+
     const population = POPULATION[borough];
     const totalWaste = data.total;
     const perCapitaWaste = tonsToLbsPerPerson(totalWaste, borough);
     const recyclables = data.paper + data.mgp;
-    const diversionRate = (recyclables + data.all_organics) / totalWaste;
-    
+    const diversionRate = (recyclables + data.all_organics) / Math.max(1, totalWaste);
+
     const stats = [
       { label: 'Total Waste', value: state.perCapita ? formatPerCapita(perCapitaWaste) : formatNumber(totalWaste), unit: state.perCapita ? 'lbs/person' : 'tons' },
       { label: 'Population', value: formatNumber(population), unit: 'people' },
       { label: 'Recyclables', value: formatNumber(recyclables), unit: 'tons' },
       { label: 'Diversion', value: formatPercent(diversionRate), unit: '' }
     ];
-    
+
     const statGrid = d3.select('#statGrid');
     const cards = statGrid.selectAll('.stat-card').data(stats);
     const cardsEnter = cards.enter().append('div').attr('class', 'stat-card');
     cardsEnter.append('div').attr('class', 'stat-label');
     cardsEnter.append('div').attr('class', 'stat-value');
-    
+
     const cardsMerge = cards.merge(cardsEnter);
     cardsMerge.select('.stat-label').text(d => d.label);
     cardsMerge.select('.stat-value').html(d => `${d.value}<span class="stat-unit">${d.unit}</span>`);
-    
+
     const keys = getStreamKeys();
     const breakdown = keys.map(k => ({
       key: k,
@@ -745,30 +771,31 @@
       value: data[k] || 0,
       color: COLORS[k]
     }));
-    
+
     const totalForBreakdown = d3.sum(breakdown, d => d.value);
-    
+
     const breakdownDiv = d3.select('#compositionBreakdown');
     const bars = breakdownDiv.selectAll('.breakdown-bar').data(breakdown);
     const barsEnter = bars.enter().append('div').attr('class', 'breakdown-bar');
     barsEnter.append('div').attr('class', 'breakdown-label');
     barsEnter.append('div').attr('class', 'breakdown-visual');
-    
+
     const barsMerge = bars.merge(barsEnter);
     barsMerge.select('.breakdown-label').html(d => `<span>${d.label}</span><span style="color:#6b7280">${formatNumber(d.value)} tons</span>`);
     barsMerge.select('.breakdown-visual').html(d => `<div class="breakdown-segment" style="width:${100 * d.value / totalForBreakdown}%; background:${d.color}"></div>`);
-    
+
     bars.exit().remove();
     render();
   }
-  
+
   function closeDetailPanel() {
     d3.select('#detail-panel').classed('show', false);
     d3.select('.main-container').classed('panel-open', false);
     state.selectedBorough = null;
     render();
   }
-  
+
+  // Month update & controls
   function updateMonth(index) {
     state.monthIndex = Math.max(0, Math.min(state.monthsSorted.length - 1, index));
     d3.select('#timeSlider').property('value', state.monthIndex);
@@ -776,11 +803,11 @@
     render();
     if (state.selectedBorough) showDetailPanel(state.selectedBorough);
   }
-  
+
   function togglePlay() {
     state.playing = !state.playing;
     const btn = d3.select('#playBtn');
-    
+
     if (state.playing) {
       btn.text('⏸ Pause');
       state.playInterval = setInterval(() => {
@@ -792,7 +819,7 @@
       if (state.playInterval) clearInterval(state.playInterval);
     }
   }
-  
+
   function updateLegend() {
     const keys = getStreamKeys();
     const legend = d3.select('#legend');
@@ -805,23 +832,39 @@
     merge.select('span').text(k => LABELS[k]);
     items.exit().remove();
   }
-  
+
+  // INIT
   async function init() {
     try {
       const rawData = await d3.csv('data/dsny.csv');
       const { monthsSorted, dataByMonth } = processData(rawData);
-      
-      state.monthsSorted = monthsSorted;
+
+      // ── Clamp months to [1993-04, 2025-12]
+      const clamped = monthsSorted.filter(ms => {
+        const d = parseMonth(ms);
+        return d && d >= START_BOUND && d <= END_BOUND;
+      });
+
+      state.monthsSorted = clamped.length ? clamped : monthsSorted; // fallback if no match
       state.dataByMonth = dataByMonth;
-      
-      d3.select('#timeSlider').property('max', monthsSorted.length - 1).on('input', function() { updateMonth(+this.value); });
+
+      // Controls
+      d3.select('#timeSlider')
+        .property('max', state.monthsSorted.length - 1)
+        .on('input', function () { updateMonth(+this.value); });
+
       d3.select('#playBtn').on('click', togglePlay);
-      d3.select('#breakdownToggle').on('change', function() { state.breakdown = this.checked; updateLegend(); render(); if (state.selectedBorough) showDetailPanel(state.selectedBorough); });
-      d3.select('#percentToggle').on('change', function() { state.showPercent = this.checked; render(); });
-      d3.select('#excludeRefuseToggle').on('change', function() { state.excludeRefuse = this.checked; updateLegend(); render(); if (state.selectedBorough) showDetailPanel(state.selectedBorough); });
-      d3.select('#perCapitaToggle').on('change', function() { state.perCapita = this.checked; d3.select('#infoBanner').classed('show', this.checked); render(); if (state.selectedBorough) showDetailPanel(state.selectedBorough); });
+      d3.select('#breakdownToggle').on('change', function () { state.breakdown = this.checked; updateLegend(); render(); if (state.selectedBorough) showDetailPanel(state.selectedBorough); });
+      d3.select('#percentToggle').on('change', function () { state.showPercent = this.checked; render(); });
+      d3.select('#excludeRefuseToggle').on('change', function () { state.excludeRefuse = this.checked; updateLegend(); render(); if (state.selectedBorough) showDetailPanel(state.selectedBorough); });
+      d3.select('#perCapitaToggle').on('change', function () {
+        state.perCapita = this.checked;
+        d3.select('#infoBanner').classed('show', this.checked);
+        render();
+        if (state.selectedBorough) showDetailPanel(state.selectedBorough);
+      });
       d3.select('#closePanel').on('click', closeDetailPanel);
-      
+
       document.addEventListener('keydown', e => {
         if (e.target.tagName === 'INPUT') return;
         if (e.key === 'ArrowLeft') { e.preventDefault(); updateMonth(state.monthIndex - 1); }
@@ -829,18 +872,25 @@
         if (e.key === ' ') { e.preventDefault(); togglePlay(); }
         if (e.key === 'Escape') { closeDetailPanel(); }
       });
-      
+
       updateLegend();
-      updateMonth(0);
-      
+
+      // ── Start at April 1993 if present; else start at first clamped month
+      const startIdx = state.monthsSorted.findIndex(ms => {
+        const d = parseMonth(ms);
+        return d && d.getUTCFullYear() === 1993 && d.getUTCMonth() === 3; // April
+      });
+      updateMonth(startIdx >= 0 ? startIdx : 0);
+
     } catch (error) {
       console.error('Error:', error);
       d3.select('#viz-container').html('<p style="color:red">Error loading data. Check console.</p>');
     }
   }
-  
+
   init();
-  
+
 })();
 </script>
+
 </html>
